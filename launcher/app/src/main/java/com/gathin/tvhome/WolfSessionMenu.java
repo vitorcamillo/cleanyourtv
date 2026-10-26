@@ -25,7 +25,7 @@ final class WolfSessionMenu {
     private final ExecutorService executor;
     private final Handler main=new Handler(Looper.getMainLooper());
     private AlertDialog dialog;
-    private boolean resumed,destroyed,busy;
+    private boolean resumed,destroyed,busy,refreshPending;
     private int generation;
 
     WolfSessionMenu(Activity activity,String hostUuid,Listener listener) {
@@ -45,17 +45,22 @@ final class WolfSessionMenu {
         refreshSession();
     }
     private void refreshSession() {
-        if(busy || !resumed || destroyed)return;
+        if(busy) {if(resumed && !destroyed)refreshPending=true;return;}
+        if(!resumed || destroyed)return;
         busy=true;int ticket=++generation;
         try {executor.execute(()-> {
             WolfSession session=null;
             try {session=factory.open().getSession();}catch(WolfControlClient.ControlException|RuntimeException ignored) {}
             WolfSession ready=session;
-            main.post(()-> {busy=false;if(resumed && !destroyed && ticket==generation)listener.sessionState(ready);});
+            main.post(()-> {
+                busy=false;
+                if(refreshPending) {refreshPending=false;if(resumed && !destroyed)refreshSession();}
+                if(resumed && !destroyed && ticket==generation)listener.sessionState(ready);
+            });
         });}catch(RejectedExecutionException ignored){busy=false;}
     }
     void pause() {resumed=false;generation++;dismiss();}
-    void close() {destroyed=true;pause();executor.shutdownNow();}
+    void close() {destroyed=true;refreshPending=false;pause();executor.shutdownNow();}
     void open(String appId,String appName) {
         try {WolfSession.validateId(appId);MoonlightCatalog.label(appName);}
         catch(IllegalArgumentException error){showError("invalid_request",null);return;}
@@ -134,6 +139,7 @@ final class WolfSessionMenu {
                 WolfSession ready=session;String code=failure;
                 main.post(()-> {
                     busy=false;
+                    if(refreshPending) {refreshPending=false;main.post(this::refreshSession);} // after this result is handled
                     if(destroyed || !resumed || ticket!=generation)return;
                     dismiss();
                     if(code!=null){Log.w("WolfSessionControl","operation_failed code="+safeCode(code));showError(code,retry);}

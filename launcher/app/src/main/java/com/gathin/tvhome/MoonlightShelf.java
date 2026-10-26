@@ -684,6 +684,12 @@ final class MoonlightShelf {
                     .putExtra("Name",pickedName).putExtra("UUID",pickedUuid));return;
         }
         MoonlightCatalog.Game game=catalog.games.get(index);
+        if(game.appId==null) {
+            // No app id: no session control, Moonlight's own lookup by name opens it.
+            start(new Intent(Intent.ACTION_VIEW).setClassName("com.limelight","com.limelight.ShortcutTrampoline")
+                    .putExtra("Name",catalog.hostName).putExtra("UUID",catalog.hostUuid).putExtra("AppName",game.name));
+            return;
+        }
         sessionMenu.open(game.appId,game.name);
     }
     private void launchControlled(String id,String name) {

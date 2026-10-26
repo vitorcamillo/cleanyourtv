@@ -126,6 +126,21 @@ use it and ends with the check to run.
 | Performance | A performance claim shows `tools/bench.py` before and after, plus trace numbers. For any other launcher change the regression check in [`docs/workflows/perf-ab.md`](docs/workflows/perf-ab.md) is optional but welcome. |
 | Stray files | No files that nothing links to: screenshots belong in the PR description, not the tree. |
 
+## This fork: Moonlight shelf and Wolf session control
+
+This repository is a personal fork (see "Your own repository" above). On top of upstream it ships, on purpose:
+
+- **`INTERNET` permission, LAN only**, used by `WolfControlClient` alone: HTTPS to an operator-provisioned session
+  controller on a private IPv4 address (10/8, 172.16/12, 192.168/16), port 47991, certificate pinned, bearer token,
+  no other host, no analytics, no background polling (one query when Home resumes).
+- **The Moonlight shelf is on by default when Moonlight (`com.limelight`) is installed**, and can be switched off
+  in the launcher's Settings menu (hold OK on Settings). Without Moonlight nothing changes.
+- **`tile_menu` defaults to true**: holding OK picks a tile up for reordering; the Menu key opens the tile menu.
+
+For this fork these three points replace the matching rules below ("No network in the launcher", "No changing a
+default for every TV", and keeping the launcher's permissions). Everything else below still applies. Upstream pull
+requests from this fork must leave these changes out.
+
 ## Hard rules
 
 Never do these in a PR:
