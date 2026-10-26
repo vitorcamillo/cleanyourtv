@@ -88,29 +88,6 @@ final class MoonlightCatalog {
         return order;
     }
 
-    /** Index of the game a launch refers to: by app id when one is present, otherwise by name, for Moonlight's cached lookup. -1 when neither matches. */
-    static int launchIndex(List<Game> games, String appId, String name) {
-        if (games == null) throw new IllegalArgumentException("Invalid games");
-        if (appId != null) {
-            for (int i = 0; i < games.size(); i++) {
-                Game game = games.get(i);
-                if (game != null && appId.equals(game.appId)) return i;
-            }
-            return -1;
-        }
-        if (name == null) return -1;
-        for (int i = 0; i < games.size(); i++) {
-            Game game = games.get(i);
-            if (game != null && name.equals(game.name)) return i;
-        }
-        return -1;
-    }
-
-    /** Whether a load that finished after a resume arrived during it must run again: only while still resumed and the catalog on disk moved on. */
-    static boolean reloadAfterLoad(boolean resumeArrivedDuringLoad, boolean resumed, long loadedStamp, long currentStamp) {
-        return resumeArrivedDuringLoad && resumed && currentStamp != loadedStamp;
-    }
-
     /** Copies the names with the entries at from and to swapped; both must be valid positions. */
     static List<String> moved(List<String> names, int from, int to) {
         if (names == null || from < 0 || to < 0 || from >= names.size() || to >= names.size()) {

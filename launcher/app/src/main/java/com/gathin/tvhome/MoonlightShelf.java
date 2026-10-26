@@ -68,6 +68,7 @@ final class MoonlightShelf {
     private boolean animateGames;
     private float gameScale;
     private TextView pcChoice;
+    private WolfSessionMenu sessionMenu;
     private boolean resumed;
     private android.app.AlertDialog hostDialog;
     private List<String> hostNames = new ArrayList<>();
@@ -76,8 +77,8 @@ final class MoonlightShelf {
     private String pickedUuid;
     private MoonlightCatalog catalog;
     private int selected;
+    private String activeGameId;
     private boolean busy;
-    private boolean pendingResume;
     private boolean destroyed;
     private long loadedStamp = Long.MIN_VALUE;
     private int panelHeight;
@@ -87,6 +88,8 @@ final class MoonlightShelf {
     private View fallbackTile;
     private TextView moving;
     private long clickGuard;
+    private TextView activePlay;
+    private ObjectAnimator activePulse;
     private final List<ObjectAnimator> wobbles = new ArrayList<>();
     private View lastDock;
     private final android.graphics.drawable.Drawable originalBackground;
@@ -108,8 +111,8 @@ final class MoonlightShelf {
             if(panel!=null)removePanel();
             return;
         }
-        if (destroyed || directory==null) return;
-        if (busy) {pendingResume=true;return;}
+        if(sessionMenu!=null && hasGameCatalog())sessionMenu.resume();
+        if (destroyed || busy || directory==null) return;
         final long stamp=new File(directory,"catalog.json").lastModified();
         if (stamp==loadedStamp) { restoreAfterReturn();position();return; }
         busy=true;
@@ -152,9 +155,7 @@ final class MoonlightShelf {
             final MoonlightCatalog ready=result;
             main.post(()-> {
                 busy=false;
-                boolean again=pendingResume;pendingResume=false;
                 if(destroyed) {recycle(images);return;}
-                if(directory!=null && MoonlightCatalog.reloadAfterLoad(again,resumed,stamp,new File(directory,"catalog.json").lastModified())) {recycle(images);loadedStamp=Long.MIN_VALUE;resume();return;}
                 loadedStamp=stamp;
                 removePanel();
                 if(!enabled() || !moonlightInstalled()) {loadedStamp=Long.MIN_VALUE;recycle(images);return;}
@@ -279,6 +280,11 @@ final class MoonlightShelf {
             spring.setSpring(new androidx.dynamicanimation.animation.SpringForce().setStiffness(440f).setDampingRatio(cfg.focusOvershoot?.82f:1f));
         }
         scroll.setOnScrollChangeListener((v,x,y,ox,oy)-> {View focused=activity.getCurrentFocus();if(isInside(scroll,focused))showGameGlass(focused);});
+        sessionMenu=new WolfSessionMenu(activity,catalog.hostUuid,new WolfSessionMenu.Listener() {
+            @Override public void launch(String id,String name) {launchControlled(id,name);}
+            @Override public void focusCarousel() {if(resumed && hasGameCatalog())focusGames();}
+            @Override public void sessionState(WolfSession session) {showActiveGame(session);}
+        });
         hero.setVisibility(View.INVISIBLE);
         root.setBackground(new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,new int[]{0xff310500,Color.BLACK}));
         grid.requestLayout();
@@ -370,8 +376,7 @@ final class MoonlightShelf {
         try {return activity.getPackageManager().getPackageInfo("com.limelight",0)!=null;}
         catch(Exception ignored) {return false;}
     }
-    /** Off until the person turns it on in the launcher's Settings (a new behaviour never defaults to on). */
-    boolean enabled() {return activity.getSharedPreferences("moonlight",0).getBoolean("enabled",false);}
+    boolean enabled() {return activity.getSharedPreferences("moonlight",0).getBoolean("enabled",true);}
     void setEnabled(boolean on) {
         activity.getSharedPreferences("moonlight",0).edit().putBoolean("enabled",on).apply();
         loadedStamp=Long.MIN_VALUE;
@@ -413,11 +418,60 @@ final class MoonlightShelf {
         else if(fallbackCard!=null)fallbackCard.requestFocusFromTouch();
         else if(pcChoice!=null)pcChoice.requestFocusFromTouch();
     }
-    /** Applies the saved order to the views in the row. */
+    private void showActiveGame(WolfSession session) {
+        activeGameId=session!=null && session.active?session.appId:null;
+        stopActivePulse();removePlayButton();
+        if(catalog==null || fallback)return;
+        if(moving==null)orderViews();
+        int active=-1;
+        if(activeGameId!=null)for(int i=0;i<cards.size();i++)if(activeGameId.equals(catalog.games.get(i).appId)){active=i;break;}
+        for(int i=0;i<cards.size();i++) {
+            TextView card=cards.get(i);
+            View tile=(View)card.getParent();
+            boolean on=i==active;
+            tile.setForeground(on?shape(Color.TRANSPARENT,0xff8deaff):null);
+            tile.setElevation(on?dp(12):0);
+            card.setContentDescription(catalog.games.get(i).name+(on?" · Jogo em andamento, pressione OK para continuar":""));
+            if(on)selected=i;
+        }
+        applyTileWidths();
+        if(active>=0)decorateActive(cards.get(active));
+    }
+
+    /** Adds the pulsing glow and the centred play badge to the running game's tile. */
+    private void decorateActive(TextView card) {
+        View tile=(View)card.getParent();
+        android.graphics.drawable.Drawable outline=tile.getForeground();
+        if(animateGames && outline!=null) {
+            activePulse=ObjectAnimator.ofInt(outline,"alpha",153,255);
+            activePulse.setDuration(900);
+            activePulse.setRepeatMode(ValueAnimator.REVERSE);
+            activePulse.setRepeatCount(ValueAnimator.INFINITE);
+            activePulse.start();
+        }
+        TextView play=text("▶",20,0xff171419);
+        play.setGravity(Gravity.CENTER);
+        GradientDrawable circle=new GradientDrawable();
+        circle.setShape(GradientDrawable.OVAL);
+        circle.setColor(0xe6ffffff);
+        play.setBackground(circle);
+        play.setFocusable(false);
+        play.setClickable(false);
+        play.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        ((FrameLayout)tile).addView(play,new FrameLayout.LayoutParams(dp(56),dp(56),Gravity.CENTER));
+        activePlay=play;
+    }
+    private void stopActivePulse() {if(activePulse!=null){activePulse.cancel();activePulse=null;}}
+    private void removePlayButton() {
+        if(activePlay!=null && activePlay.getParent() instanceof ViewGroup)((ViewGroup)activePlay.getParent()).removeView(activePlay);
+        activePlay=null;
+    }
+
+    /** Applies the saved order (running game first) to the views in the row. */
     private void orderViews() {
         if(catalog==null || row==null || cards.isEmpty() || row.getChildCount()!=cards.size())return;
         List<View> views=new ArrayList<>();
-        for(int index:MoonlightCatalog.displayOrder(catalog.games,savedOrder(),null)) {
+        for(int index:MoonlightCatalog.displayOrder(catalog.games,savedOrder(),activeGameId)) {
             View tile=(View)cards.get(index).getParent();
             if(tile==null)return;
             views.add(tile);
@@ -464,8 +518,13 @@ final class MoonlightShelf {
             if(tile==null)continue;
             ViewGroup.LayoutParams lp=tile.getLayoutParams();
             if(lp==null)continue;
-            if(lp.width!=base) {lp.width=base;tile.setLayoutParams(lp);}
+            int width=isActiveGame(i)?Math.round(base*1.3f):base;
+            if(lp.width!=width) {lp.width=width;tile.setLayoutParams(lp);}
         }
+    }
+    private boolean isActiveGame(int index) {
+        return activeGameId!=null && catalog!=null && index>=0 && index<catalog.games.size()
+                && activeGameId.equals(catalog.games.get(index).appId);
     }
     private List<String> savedOrder() {
         List<String> names=new ArrayList<>();
@@ -606,7 +665,7 @@ final class MoonlightShelf {
                 .setSingleChoiceItems(hostNames.toArray(new String[0]),selectedHost,(dialog,which)-> {
                     activity.getSharedPreferences("moonlight",0).edit().putString("host_uuid",hostUuids.get(which)).apply();
                     applyHost();dialog.dismiss();pcChoice.post(pcChoice::requestFocusFromTouch);
-                }).setNeutralButton("Gerenciar no Moonlight",(dialog,which)->openMoonlight())
+                }).setNeutralButton(hasGameCatalog()?"Jogo em andamento":"Gerenciar no Moonlight",(dialog,which)-> {if(hasGameCatalog() && sessionMenu!=null)sessionMenu.showCurrent();else openMoonlight();})
                 .setNegativeButton("Cancelar",null).show();
     }
     private void applyHost() {
@@ -617,6 +676,7 @@ final class MoonlightShelf {
         scroll.setVisibility(hasGameCatalog()?View.VISIBLE:View.GONE);
         selectedName.setText(hasGameCatalog()?catalog.games.get(selected).name:"");
         library.setVisibility(hasGameCatalog()?View.GONE:View.VISIBLE);
+        if(sessionMenu!=null){if(hasGameCatalog() && resumed)sessionMenu.resume();else sessionMenu.pause();}
     }
     private void launch(int index) {
         if(!hasGameCatalog()) {
@@ -624,32 +684,31 @@ final class MoonlightShelf {
                     .putExtra("Name",pickedName).putExtra("UUID",pickedUuid));return;
         }
         MoonlightCatalog.Game game=catalog.games.get(index);
-        launchControlled(game.appId,game.name);
+        sessionMenu.open(game.appId,game.name);
     }
     private void launchControlled(String id,String name) {
         if(!resumed || !hasGameCatalog())return;
         returningFromGame=true;lowerApps=false;
-        int found=MoonlightCatalog.launchIndex(catalog.games,id,name);
-        if(found>=0)selected=found;
+        for(int i=0;i<catalog.games.size();i++)if(id.equals(catalog.games.get(i).appId))selected=i;
         activity.getSharedPreferences("moonlight",0).edit().putBoolean("return_to_games",true).putString("game_name",catalog.games.get(selected).name).apply();
-        Intent intent=new Intent(Intent.ACTION_VIEW).setClassName("com.limelight","com.limelight.ShortcutTrampoline")
-                .putExtra("Name",catalog.hostName).putExtra("UUID",catalog.hostUuid).putExtra("AppName",name);
-        if(id!=null)intent.putExtra("AppId",id);
-        start(intent);
+        start(new Intent(Intent.ACTION_VIEW).setClassName("com.limelight","com.limelight.ShortcutTrampoline")
+                .putExtra("Name",catalog.hostName).putExtra("UUID",catalog.hostUuid).putExtra("AppName",name).putExtra("AppId",id));
     }
-    void pause() {resumed=false;}
+    void pause() {resumed=false;if(sessionMenu!=null)sessionMenu.pause();}
     private void openMoonlight() {start(new Intent(Intent.ACTION_MAIN).setClassName("com.limelight","com.limelight.PcView"));}
     private void start(Intent intent) {
         try {activity.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));}catch(ActivityNotFoundException|SecurityException e) {Toast.makeText(activity,"Não foi possível abrir o Moonlight. Confira se ele está instalado.",Toast.LENGTH_LONG).show();}
     }
     private void removePanel() {
+        if(sessionMenu!=null)sessionMenu.close();sessionMenu=null;
         if(gameSpringX!=null)gameSpringX.cancel();if(gameSpringY!=null)gameSpringY.cancel();
         if(gameGlass!=null)root.removeView(gameGlass);gameGlass=null;
         for(ObjectAnimator wobble:wobbles)wobble.cancel();
         wobbles.clear();
+        stopActivePulse();removePlayButton();
         if(panel!=null)root.removeView(panel);
         panel=null;row=null;catalog=null;cards.clear();covers.clear();recycle(bitmaps);bitmaps.clear();panelHeight=0;
-        fallback=false;fallbackCard=null;fallbackTile=null;moving=null;tileWidth=0;
+        fallback=false;fallbackCard=null;fallbackTile=null;moving=null;activeGameId=null;tileWidth=0;
         root.setBackground(originalBackground);
         hero.setVisibility(Config.load(activity).dockTitle?View.VISIBLE:View.GONE);
         grid.requestLayout();

@@ -84,26 +84,6 @@ public class MoonlightCatalogTest {
         assertEquals(3,new java.util.HashSet<>(order).size());
         for(int i=0;i<3;i++)assertTrue(order.contains(i));
     }
-    @Test public void launchIndexResolvesNameOnlyGamesAndIds() {
-        List<MoonlightCatalog.Game> games = new ArrayList<>();
-        games.add(game("Alpha",null,null));
-        games.add(game("Beta","2",null));
-        games.add(game("Gamma",null,null));
-        assertEquals(0,MoonlightCatalog.launchIndex(games,null,"Alpha"));
-        assertEquals(2,MoonlightCatalog.launchIndex(games,null,"Gamma"));
-        assertEquals(1,MoonlightCatalog.launchIndex(games,"2","Beta"));
-        assertEquals(1,MoonlightCatalog.launchIndex(games,"2","Alpha"));
-        assertEquals(-1,MoonlightCatalog.launchIndex(games,null,"Missing"));
-        assertEquals(-1,MoonlightCatalog.launchIndex(games,null,null));
-        assertEquals(-1,MoonlightCatalog.launchIndex(games,"999","Beta"));
-        assertThrows(IllegalArgumentException.class,()->MoonlightCatalog.launchIndex(null,null,"Alpha"));
-    }
-    @Test public void reloadAfterLoadOnlyForResumeDuringLoadWithNewerCatalog() {
-        assertTrue(MoonlightCatalog.reloadAfterLoad(true,true,100L,200L));
-        assertFalse(MoonlightCatalog.reloadAfterLoad(true,true,100L,100L));
-        assertFalse(MoonlightCatalog.reloadAfterLoad(false,true,100L,200L));
-        assertFalse(MoonlightCatalog.reloadAfterLoad(true,false,100L,200L));
-    }
     @Test public void movedSwapsNeighbouringNamesAndLeavesTheInputAlone() {
         List<String> names = java.util.Arrays.asList("Alpha","Beta","Gamma");
         assertEquals(java.util.Arrays.asList("Beta","Alpha","Gamma"),MoonlightCatalog.moved(names,0,1));
