@@ -49,6 +49,7 @@ final class MoonlightShelf {
     private final View glass;
     private final File directory;
     private final float density;
+    private final boolean dockRow;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService loader = Executors.newSingleThreadExecutor();
     private final ViewTreeObserver.OnGlobalLayoutListener layoutListener = this::position;
@@ -96,6 +97,7 @@ final class MoonlightShelf {
     MoonlightShelf(Activity activity, FrameLayout root, RecyclerView grid, View hero, View glass) {
         this.activity=activity; this.root=root; this.grid=grid; this.hero=hero; this.glass=glass;
         density=activity.getResources().getDisplayMetrics().density;
+        dockRow=Config.load(activity).dockRow;
         originalBackground=root.getBackground();
         File external=activity.getExternalFilesDir(null);
         directory=external==null ? null : new File(external,"moonlight");
@@ -314,6 +316,15 @@ final class MoonlightShelf {
         if(panel==null || root.getHeight()==0)return;
         if(lowerApps){panel.setVisibility(View.INVISIBLE);if(gameGlass!=null)gameGlass.setAlpha(0f);return;}
         if(grid.getHeight()==0)return;
+        // MainActivity grows the grid's top padding for the shelf after the tiles are laid out, which leaves the dock
+        // above its padding line until a dock tile is focused; park it here the same way onTileFocused does.
+        if(dockRow && !isInside(grid,activity.getCurrentFocus())) {
+            View dockItem=grid.getLayoutManager()==null?null:grid.getLayoutManager().findViewByPosition(0);
+            if(dockItem!=null) {
+                int dy=dockItem.getTop()-dp(6)-grid.getPaddingTop();
+                if(Math.abs(dy)>dp(8))grid.scrollBy(0,dy);
+            }
+        }
         // The dock target is stable even while RecyclerView recycles or animates its children.
         // DockDecoration adds 6dp above item_app's 8dp top padding.
         Rect dock=new Rect(0,0,grid.getWidth(),grid.getHeight());root.offsetDescendantRectToMyCoords(grid,dock);
