@@ -5,6 +5,10 @@ plugins {
 android {
     namespace 'com.gathin.tvhome'
     compileSdk 34
+    testOptions {
+        unitTests.includeAndroidResources = true
+        unitTests.all { jvmArgs "--add-opens=java.base/java.net=ALL-UNNAMED" }
+    }
 
     defaultConfig {
         // Opt-in identity for firmware with a package-name HOME allowlist; see docs/devices/xiaomi-mitv-aetp0-dofus.md.
@@ -45,4 +49,5 @@ dependencies {
     implementation 'androidx.dynamicanimation:dynamicanimation:1.0.0'
     // Test only (never in the APK): plain JVM tests for the module card validators, src/test.
     testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.14.1'
 }

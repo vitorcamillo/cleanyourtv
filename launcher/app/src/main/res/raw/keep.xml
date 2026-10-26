@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- app_banners names drawables at run time, which resource shrinking cannot see: keep every banner_*. -->
+<!-- app_banners names drawables at run time, which resource shrinking cannot see: keep every banner_*.
+     Strict: that is the only getIdentifier, and safe mode let the Wolf bridge's "status" JSON key keep AndroidX's
+     status_bar_* strings (~45 KB of translations). -->
 <resources xmlns:tools="http://schemas.android.com/tools"
-    tools:keep="@drawable/banner_*" />
+    tools:keep="@drawable/banner_*"
+    tools:shrinkMode="strict" />
