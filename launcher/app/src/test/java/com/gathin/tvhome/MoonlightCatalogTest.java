@@ -52,6 +52,52 @@ public class MoonlightCatalogTest {
         assertThrows(IllegalArgumentException.class,()->new MoonlightCatalog("Wolf",UUID,java.util.Arrays.asList(game("A",null,null),game("A",null,null))));
         assertThrows(IllegalArgumentException.class,()->new MoonlightCatalog("Wolf",UUID,java.util.Arrays.asList((MoonlightCatalog.Game)null)));
     }
+    private List<MoonlightCatalog.Game> threeGames() {
+        List<MoonlightCatalog.Game> games = new ArrayList<>();
+        games.add(game("Alpha", "1", null));
+        games.add(game("Beta", "2", null));
+        games.add(game("Gamma", "3", null));
+        return games;
+    }
+    @Test public void displayOrderKeepsCatalogOrderWithoutSavedNamesOrActive() {
+        List<MoonlightCatalog.Game> games = threeGames();
+        assertEquals(java.util.Arrays.asList(0,1,2),MoonlightCatalog.displayOrder(games,null,null));
+        assertEquals(java.util.Arrays.asList(0,1,2),MoonlightCatalog.displayOrder(games,Collections.emptyList(),null));
+        games.set(0,game("Alpha",null,null));
+        assertEquals(java.util.Arrays.asList(0,1,2),MoonlightCatalog.displayOrder(games,null,"1"));
+    }
+    @Test public void displayOrderLeadsWithRunningGame() {
+        List<MoonlightCatalog.Game> games = threeGames();
+        assertEquals(java.util.Arrays.asList(1,2,0),MoonlightCatalog.displayOrder(games,java.util.Arrays.asList("Gamma","Alpha"),"2"));
+        assertEquals(java.util.Arrays.asList(2,0,1),MoonlightCatalog.displayOrder(games,java.util.Arrays.asList("Gamma","Alpha"),"3"));
+    }
+    @Test public void displayOrderFollowsPartialSavedOrderAndIgnoresUnknownNames() {
+        List<MoonlightCatalog.Game> games = threeGames();
+        assertEquals(java.util.Arrays.asList(2,0,1),MoonlightCatalog.displayOrder(games,java.util.Arrays.asList("Gamma","Missing"),null));
+        assertEquals(java.util.Arrays.asList(2,0,1),MoonlightCatalog.displayOrder(games,java.util.Arrays.asList("Missing","Gamma","Missing","Gamma"),null));
+    }
+    @Test public void displayOrderIgnoresActiveOutsideCatalogAndKeepsEveryIndexOnce() {
+        List<MoonlightCatalog.Game> games = threeGames();
+        List<Integer> order = MoonlightCatalog.displayOrder(games,java.util.Arrays.asList("Beta"),"999");
+        assertEquals(java.util.Arrays.asList(1,0,2),order);
+        assertEquals(3,order.size());
+        assertEquals(3,new java.util.HashSet<>(order).size());
+        for(int i=0;i<3;i++)assertTrue(order.contains(i));
+    }
+    @Test public void movedSwapsNeighbouringNamesAndLeavesTheInputAlone() {
+        List<String> names = java.util.Arrays.asList("Alpha","Beta","Gamma");
+        assertEquals(java.util.Arrays.asList("Beta","Alpha","Gamma"),MoonlightCatalog.moved(names,0,1));
+        assertEquals(java.util.Arrays.asList("Alpha","Gamma","Beta"),MoonlightCatalog.moved(names,1,2));
+        assertEquals(java.util.Arrays.asList("Alpha","Beta","Gamma"),names);
+    }
+    @Test public void movedRejectsPositionsOutsideTheList() {
+        List<String> names = java.util.Arrays.asList("Alpha","Beta","Gamma");
+        for(int[] bad:new int[][]{{-1,0},{0,-1},{0,3},{3,0},{2,3}}) {
+            assertThrows(IllegalArgumentException.class,()->MoonlightCatalog.moved(names,bad[0],bad[1]));
+        }
+        assertThrows(IllegalArgumentException.class,()->MoonlightCatalog.moved(null,0,0));
+        assertThrows(IllegalArgumentException.class,()->MoonlightCatalog.moved(Collections.emptyList(),0,0));
+    }
     @Test public void refusesSymlinksOutsideCatalog() throws Exception {
         File directory=Files.createTempDirectory("moonlight-test").toFile();
         File outside=Files.createTempFile("cover", ".png").toFile();

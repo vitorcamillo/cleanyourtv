@@ -56,6 +56,50 @@ final class MoonlightCatalog {
         games = Collections.unmodifiableList(new ArrayList<>(entries));
     }
 
+    /** Display indices: the running game first, then the saved order, then catalog order. */
+    static List<Integer> displayOrder(List<Game> games, List<String> savedNames, String activeAppId) {
+        if (games == null) throw new IllegalArgumentException("Invalid games");
+        List<Integer> order = new ArrayList<>(games.size());
+        boolean[] used = new boolean[games.size()];
+        if (activeAppId != null) {
+            for (int i = 0; i < games.size(); i++) {
+                Game game = games.get(i);
+                if (game != null && activeAppId.equals(game.appId)) {
+                    used[i] = true;
+                    order.add(i);
+                    break;
+                }
+            }
+        }
+        if (savedNames != null) {
+            for (String name : savedNames) {
+                if (name == null) continue;
+                for (int i = 0; i < games.size(); i++) {
+                    Game game = games.get(i);
+                    if (!used[i] && game != null && name.equals(game.name)) {
+                        used[i] = true;
+                        order.add(i);
+                        break;
+                    }
+                }
+            }
+        }
+        for (int i = 0; i < games.size(); i++) if (!used[i]) order.add(i);
+        return order;
+    }
+
+    /** Copies the names with the entries at from and to swapped; both must be valid positions. */
+    static List<String> moved(List<String> names, int from, int to) {
+        if (names == null || from < 0 || to < 0 || from >= names.size() || to >= names.size()) {
+            throw new IllegalArgumentException("Invalid move");
+        }
+        List<String> order = new ArrayList<>(names);
+        String value = order.get(from);
+        order.set(from, order.get(to));
+        order.set(to, value);
+        return order;
+    }
+
     static String label(String value) {
         if (value == null || value.trim().isEmpty() || value.length() > 120 || !value.equals(value.trim())) {
             throw new IllegalArgumentException("Invalid label");

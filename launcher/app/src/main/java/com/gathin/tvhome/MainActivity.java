@@ -1,6 +1,8 @@
 package com.gathin.tvhome;
 
+import android.animation.Animator;
 import android.animation.ArgbEvaluator;
+import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.Dialog;
@@ -90,6 +92,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.WeakHashMap;
 
 /**
  * tvOS style home: black, a pinned dock row, an app grid, and one glass highlight that springs between tiles.
@@ -270,6 +273,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private PopupWindow openPopup;
     /** Reorder mode is on (top-bar button). */
     private boolean reordering;
+    /** The shake running on each tile in reorder mode, so it can be cancelled when the tile goes or the mode ends. */
+    private final WeakHashMap<View, Animator> wiggles = new WeakHashMap<>();
+    /** Held OK picked a tile up: the release of that same press must not put it down again. */
+    private boolean holdPickedUp;
     /** Key of the tile being carried in reorder mode, or null. */
     private String movingKey;
     /** Tile order when reorder mode started, to save only when something moved. */
@@ -584,10 +591,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             @Override
             public void onChildViewAttachedToWindow(@NonNull View v) {
                 v.setAlpha(tileAlpha(grid.getChildAdapterPosition(v)));
+                wiggle(v, reordering);
             }
 
             @Override
             public void onChildViewDetachedFromWindow(@NonNull View v) {
+                wiggle(v, false);
             }
         });
         if (dockRow) grid.addItemDecoration(new DockDecoration(COLUMNS, density, cinematic, cfg.alwaysShowNames, cfg.dockOpacity, cfg.dockGlass, cfg.dockEvenPadding, cfg.dockBand,
@@ -1272,7 +1281,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (position >= 0 && position < adapter.appCount()
                     && !getPackageName().equals(adapter.packageAt(position))) {
                 if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) {
-                    onTileLongPress(position, getCurrentFocus());
+                    showTileMenu(position, getCurrentFocus());
                 }
                 return true;
             }
@@ -1295,7 +1304,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     return true;
                 default:
                     if (ok || back) {
-                        if (!down) drop();
+                        if (!down && ok && holdPickedUp) holdPickedUp = false;
+                        else if (!down) drop();
                         return true;
                     }
                     return super.dispatchKeyEvent(event);
@@ -1355,6 +1365,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         orderAtStart = adapter.movableKeys();
         glass.setAccent(REORDER_ACCENT);
         btnReorder.setActivated(true);
+        for (int i = 0; i < grid.getChildCount(); i++) wiggle(grid.getChildAt(i), true);
         return true;
     }
 
@@ -1488,9 +1499,32 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         return 1f;
     }
 
+    /**
+     * The iOS-style shake that says a tile can be moved: on starts it once per tile, off stops it and straightens
+     * the tile. Motion off (animations false, reduced_motion) leaves the tiles still.
+     */
+    private void wiggle(View item, boolean on) {
+        if (!on || reducedMotion || !animations) {
+            Animator running = wiggles.remove(item);
+            if (running != null) running.cancel();
+            item.setRotation(0f);
+            return;
+        }
+        if (wiggles.containsKey(item)) return;
+        int pos = grid.getChildAdapterPosition(item);
+        ObjectAnimator animator = ObjectAnimator.ofFloat(item, "rotation", -1.5f, 1.5f);
+        // A different duration per position keeps neighbouring tiles out of step.
+        animator.setDuration(110 + (pos == RecyclerView.NO_POSITION ? 0 : Math.abs(pos % 4) * 10));
+        animator.setRepeatMode(ValueAnimator.REVERSE);
+        animator.setRepeatCount(ValueAnimator.INFINITE);
+        wiggles.put(item, animator);
+        animator.start();
+    }
+
     /** Ends the mode and saves the order if it changed since the mode started. */
     private void endReorder() {
         if (!reordering) return;
+        holdPickedUp = false;
         dockEditing = false;
         dockEditSlot = -1;
         dockEditAppKey = null;
@@ -1499,6 +1533,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         adapter.setReordering(false);
         glass.setAccent(festive ? festival.accentColor() : 0);
         btnReorder.setActivated(false);
+        for (int i = 0; i < grid.getChildCount(); i++) wiggle(grid.getChildAt(i), false);
         List<String> keys = adapter.movableKeys();
         List<String> before = orderAtStart;
         orderAtStart = null;
@@ -3275,6 +3310,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         if (moduleCards) addSettingsMenuRow(rows, popup, R.string.module_cards, this::showModuleCards);
         if (dockRow) addSettingsMenuRow(rows, popup, R.string.dock_edit, this::startDockEdit);
+        if (moonlightShelf != null && moonlightShelf.moonlightInstalled()) {
+            addSettingsMenuRow(rows, popup,
+                    moonlightShelf.enabled() ? "Jogos Moonlight: Ligado" : "Jogos Moonlight: Desligado",
+                    () -> {
+                        moonlightShelf.setEnabled(!moonlightShelf.enabled());
+                        grid.requestLayout();
+                    });
+        }
         addSettingsMenuRow(rows, popup, R.string.reorder, this::toggleReorder);
         // A launcher may not restart the TV itself; the Home key helper can open the system power menu instead.
         if (HomeKeyService.canOpenPowerMenu()) addSettingsMenuRow(rows, popup, R.string.power_menu, HomeKeyService::openPowerMenu);
@@ -3286,13 +3329,33 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         rows.getChildAt(0).requestFocus();
     }
 
-    /**
-     * Hold OK on a tile: a glass menu next to it. Move starts reorder mode with this tile already picked up;
-     * Remove from Home takes the shortcut off (only with the app library on, where one press adds it back);
-     * App info opens the TV's page for the app, which is what holding OK used to do.
-     */
+    /** Hold OK on a movable app: reorder mode starts with its tile already picked up. */
     @Override
     public void onTileLongPress(int position, View card) {
+        if (reordering) return;
+        String key = adapter.keyAt(position);
+        String pkg = adapter.packageAt(position);
+        // Empty dock slots and the Default-home tile carry the launcher's own package: no menu for them.
+        if (key == null || pkg == null || pkg.equals(getPackageName())) return;
+        if (position >= adapter.movableCount()) {
+            showTileMenu(position, card);
+            return;
+        }
+        if (!beginReorder()) return;
+        int at = adapter.positionOf(key);   // beginReorder can rebuild the tiles
+        if (at < 0) return;
+        focusTile(at);
+        pickUp(at);
+        holdPickedUp = true;
+        Toast.makeText(this, R.string.reorder_hint, Toast.LENGTH_LONG).show();
+    }
+
+    /**
+     * The glass menu next to a tile. Move starts reorder mode with this tile already picked up; Remove from Home
+     * takes the shortcut off (only with the app library on, where one press adds it back); App info opens the TV's
+     * page for the app. The remote's Menu key always opens it.
+     */
+    private void showTileMenu(int position, View card) {
         if (reordering) return;
         String key = adapter.keyAt(position);
         String pkg = adapter.packageAt(position);
@@ -3342,6 +3405,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     }
 
     private void addSettingsMenuRow(LinearLayout rows, PopupWindow popup, int title, Runnable action) {
+        addSettingsMenuRow(rows, popup, getString(title), action);
+    }
+
+    private void addSettingsMenuRow(LinearLayout rows, PopupWindow popup, CharSequence title, Runnable action) {
         View row = getLayoutInflater().inflate(R.layout.item_input, rows, false);
         row.findViewById(R.id.icon).setVisibility(View.GONE);
         row.findViewById(R.id.dot).setVisibility(View.GONE);

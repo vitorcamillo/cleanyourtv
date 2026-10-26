@@ -1,5 +1,7 @@
 package com.gathin.tvhome;
 
+import android.animation.ObjectAnimator;
+import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
@@ -11,6 +13,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
@@ -31,7 +34,9 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -52,6 +57,7 @@ final class MoonlightShelf {
     private final List<Bitmap> bitmaps = new ArrayList<>();
     private LinearLayout panel;
     private HorizontalScrollView scroll;
+    private LinearLayout row;
     private TextView selectedName;
     private TextView library;
     private boolean lowerApps;
@@ -75,6 +81,15 @@ final class MoonlightShelf {
     private boolean destroyed;
     private long loadedStamp = Long.MIN_VALUE;
     private int panelHeight;
+    private int tileWidth;
+    private boolean fallback;
+    private TextView fallbackCard;
+    private View fallbackTile;
+    private TextView moving;
+    private long clickGuard;
+    private TextView activePlay;
+    private ObjectAnimator activePulse;
+    private final List<ObjectAnimator> wobbles = new ArrayList<>();
     private View lastDock;
     private final android.graphics.drawable.Drawable originalBackground;
 
@@ -89,6 +104,11 @@ final class MoonlightShelf {
 
     void resume() {
         resumed=true;
+        if(!enabled() || !moonlightInstalled()) {
+            loadedStamp=Long.MIN_VALUE;
+            if(panel!=null)removePanel();
+            return;
+        }
         if(sessionMenu!=null && hasGameCatalog())sessionMenu.resume();
         if (destroyed || busy || directory==null) return;
         final long stamp=new File(directory,"catalog.json").lastModified();
@@ -136,7 +156,8 @@ final class MoonlightShelf {
                 if(destroyed) {recycle(images);return;}
                 loadedStamp=stamp;
                 removePanel();
-                if(ready==null) {recycle(images);return;}
+                if(!enabled() || !moonlightInstalled()) {loadedStamp=Long.MIN_VALUE;recycle(images);return;}
+                if(ready==null) {recycle(images);showFallback();return;}
                 catalog=ready;hostNames=names;hostUuids=uuids;bitmaps.addAll(images);build();
             });
         });
@@ -192,7 +213,7 @@ final class MoonlightShelf {
         panel.addView(heading,new LinearLayout.LayoutParams(-1,dp(36)));
         scroll=new HorizontalScrollView(activity);scroll.setHorizontalScrollBarEnabled(false);scroll.setClipToPadding(false);scroll.setClipChildren(false);
         scroll.setPadding(dp(5),dp(5),dp(5),dp(5));scroll.setFillViewport(false);scroll.setFocusable(false);
-        LinearLayout row=new LinearLayout(activity);row.setOrientation(LinearLayout.HORIZONTAL);row.setClipChildren(false);
+        row=new LinearLayout(activity);row.setOrientation(LinearLayout.HORIZONTAL);row.setClipChildren(false);
         scroll.addView(row,new ViewGroup.LayoutParams(-2,-1));
         panel.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         for(int i=0;i<catalog.games.size();i++) {
@@ -222,13 +243,16 @@ final class MoonlightShelf {
                     card.post(()->showGameGlass(card));
                 } else card.post(()-> {if(gameGlass!=null && !isInside(scroll,activity.getCurrentFocus()))gameGlass.setAlpha(0f);});
             });
-            card.setOnClickListener(v->launch(index));
+            card.setOnClickListener(v-> {if(moving==null && SystemClock.uptimeMillis()>clickGuard)launch(index);});
+            card.setOnLongClickListener(v-> {startMove(index);return true;});
             card.setOnKeyListener((v,key,event)-> {
                 if(event.getAction()!=KeyEvent.ACTION_DOWN)return false;
-                if(key==KeyEvent.KEYCODE_DPAD_UP) {pcChoice.requestFocusFromTouch();return true;}
+                if(moving!=null)return event.getRepeatCount()>0 || moveKey(key);
+                int place=row==null?-1:row.indexOfChild(tile);
+                if(key==KeyEvent.KEYCODE_DPAD_UP) {if(pcChoice!=null)pcChoice.requestFocusFromTouch();return true;}
                 if(key==KeyEvent.KEYCODE_DPAD_DOWN) {focusDock();return true;}
-                if(key==KeyEvent.KEYCODE_DPAD_LEFT && index==0)return true;
-                if(key==KeyEvent.KEYCODE_DPAD_RIGHT && index==cards.size()-1)return true;
+                if(key==KeyEvent.KEYCODE_DPAD_LEFT && place==0)return true;
+                if(key==KeyEvent.KEYCODE_DPAD_RIGHT && row!=null && place==row.getChildCount()-1)return true;
                 return false;
             });
         }
@@ -262,7 +286,9 @@ final class MoonlightShelf {
         hero.setVisibility(View.INVISIBLE);
         root.setBackground(new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,new int[]{0xff310500,Color.BLACK}));
         grid.requestLayout();
+        if(!lowerApps)parkDock(); // only a focused tile parks the dock; cold start focuses the shelf
         applyHost();
+        orderViews();
         position();
         restoreAfterReturn();
     }
@@ -281,6 +307,8 @@ final class MoonlightShelf {
         GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(8));if(stroke!=0)d.setStroke(dp(2),stroke);return d;
     }
     private int dp(float value) {return Math.round(value*density);}
+    // scrollToPosition(0) is a no-op here: with clipToPadding off the dock counts as visible while scrolled up into the padding.
+    private void parkDock() {((androidx.recyclerview.widget.LinearLayoutManager)grid.getLayoutManager()).scrollToPositionWithOffset(0,0);}
 
     private void position() {
         if(panel==null || root.getHeight()==0)return;
@@ -303,8 +331,9 @@ final class MoonlightShelf {
         if(lp.topMargin!=top || lp.height!=height){lp.topMargin=top;lp.height=height;panel.setLayoutParams(lp);}
         if(panelHeight!=height) {
             panelHeight=height;
-            int width=Math.max(dp(72),Math.round((height-dp(68))*.75f));
-            for(TextView view:cards) {ViewGroup tile=(ViewGroup)view.getParent();ViewGroup.LayoutParams tp=tile.getLayoutParams();tp.width=width;tile.setLayoutParams(tp);}
+            tileWidth=Math.max(dp(72),Math.round((height-dp(68))*.75f));
+            applyTileWidths();
+            if(fallbackTile!=null) {ViewGroup.LayoutParams tp=fallbackTile.getLayoutParams();if(tp.width!=tileWidth){tp.width=tileWidth;fallbackTile.setLayoutParams(tp);}}
         }
         if(returningFromGame && hasGameCatalog()){returningFromGame=false;cards.get(selected).post(()->cards.get(selected).requestFocusFromTouch());}
     }
@@ -314,7 +343,7 @@ final class MoonlightShelf {
         if(returningFromGame || activity.getSharedPreferences("moonlight",0).getBoolean("return_to_games",false)) {
             returningFromGame=true;lowerApps=false;
             activity.getSharedPreferences("moonlight",0).edit().putBoolean("return_to_games",false).apply();
-            grid.scrollToPosition(0);grid.requestLayout();panel.setVisibility(View.VISIBLE);panel.post(this::position);
+            parkDock();grid.requestLayout();panel.setVisibility(View.VISIBLE);panel.post(this::position);
         }
     }
     private void showGameGlass(View card) {
@@ -330,10 +359,24 @@ final class MoonlightShelf {
         gameGlass.setAlpha(1f);glass.animate().cancel();glass.setAlpha(0f);
     }
 
-    boolean active() { return catalog != null && panel != null; }
+    boolean active() { return panel != null && (catalog != null || fallback); }
+
+    boolean moonlightInstalled() {
+        try {return activity.getPackageManager().getPackageInfo("com.limelight",0)!=null;}
+        catch(Exception ignored) {return false;}
+    }
+    boolean enabled() {return activity.getSharedPreferences("moonlight",0).getBoolean("enabled",true);}
+    void setEnabled(boolean on) {
+        activity.getSharedPreferences("moonlight",0).edit().putBoolean("enabled",on).apply();
+        loadedStamp=Long.MIN_VALUE;
+        if(!on) {removePanel();return;}
+        if(resumed)resume();
+    }
 
     boolean key(KeyEvent event) {
         if(panel==null || panel.getVisibility()!=View.VISIBLE || event.getAction()!=KeyEvent.ACTION_DOWN)return false;
+        // Repeats of the held OK that started the move must not end it.
+        if(moving!=null && (event.getRepeatCount()>0 || moveKey(event.getKeyCode())))return true;
         View focused=activity.getCurrentFocus();
         if(event.getKeyCode()==KeyEvent.KEYCODE_BACK && isInside(panel,focused)) {focusDock();return true;}
         if(event.getKeyCode()==KeyEvent.KEYCODE_DPAD_UP && isInside(grid,focused)) {
@@ -359,18 +402,251 @@ final class MoonlightShelf {
         else if(grid.getChildCount()>0) {View card=grid.getChildAt(0).findViewById(R.id.card);if(card!=null)card.requestFocusFromTouch();}
     }
     private boolean hasGameCatalog() { return catalog!=null && catalog.hostUuid.equals(pickedUuid); }
-    private void focusGames() {if(hasGameCatalog())cards.get(selected).requestFocusFromTouch();else pcChoice.requestFocusFromTouch();}
+    private void focusGames() {
+        if(hasGameCatalog())cards.get(selected).requestFocusFromTouch();
+        else if(fallbackCard!=null)fallbackCard.requestFocusFromTouch();
+        else if(pcChoice!=null)pcChoice.requestFocusFromTouch();
+    }
     private void showActiveGame(WolfSession session) {
         activeGameId=session!=null && session.active?session.appId:null;
+        stopActivePulse();removePlayButton();
+        if(catalog==null || fallback)return;
+        if(moving==null)orderViews();
+        int active=-1;
+        if(activeGameId!=null)for(int i=0;i<cards.size();i++)if(activeGameId.equals(catalog.games.get(i).appId)){active=i;break;}
         for(int i=0;i<cards.size();i++) {
             TextView card=cards.get(i);
-            boolean active=activeGameId!=null && activeGameId.equals(catalog.games.get(i).appId);
             View tile=(View)card.getParent();
-            tile.setForeground(active?shape(Color.TRANSPARENT,0xff8deaff):null);
-            tile.setElevation(active?dp(12):0);
-            card.setContentDescription(catalog.games.get(i).name+(active?" · Jogo em andamento":""));
-            if(active)selected=i;
+            boolean on=i==active;
+            tile.setForeground(on?shape(Color.TRANSPARENT,0xff8deaff):null);
+            tile.setElevation(on?dp(12):0);
+            card.setContentDescription(catalog.games.get(i).name+(on?" · Jogo em andamento, pressione OK para continuar":""));
+            if(on)selected=i;
         }
+        applyTileWidths();
+        if(active>=0)decorateActive(cards.get(active));
+    }
+
+    /** Adds the pulsing glow and the centred play badge to the running game's tile. */
+    private void decorateActive(TextView card) {
+        View tile=(View)card.getParent();
+        android.graphics.drawable.Drawable outline=tile.getForeground();
+        if(animateGames && outline!=null) {
+            activePulse=ObjectAnimator.ofInt(outline,"alpha",153,255);
+            activePulse.setDuration(900);
+            activePulse.setRepeatMode(ValueAnimator.REVERSE);
+            activePulse.setRepeatCount(ValueAnimator.INFINITE);
+            activePulse.start();
+        }
+        TextView play=text("▶",20,0xff171419);
+        play.setGravity(Gravity.CENTER);
+        GradientDrawable circle=new GradientDrawable();
+        circle.setShape(GradientDrawable.OVAL);
+        circle.setColor(0xe6ffffff);
+        play.setBackground(circle);
+        play.setFocusable(false);
+        play.setClickable(false);
+        play.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        ((FrameLayout)tile).addView(play,new FrameLayout.LayoutParams(dp(56),dp(56),Gravity.CENTER));
+        activePlay=play;
+    }
+    private void stopActivePulse() {if(activePulse!=null){activePulse.cancel();activePulse=null;}}
+    private void removePlayButton() {
+        if(activePlay!=null && activePlay.getParent() instanceof ViewGroup)((ViewGroup)activePlay.getParent()).removeView(activePlay);
+        activePlay=null;
+    }
+
+    /** Applies the saved order (running game first) to the views in the row. */
+    private void orderViews() {
+        if(catalog==null || row==null || cards.isEmpty() || row.getChildCount()!=cards.size())return;
+        List<View> views=new ArrayList<>();
+        for(int index:MoonlightCatalog.displayOrder(catalog.games,savedOrder(),activeGameId)) {
+            View tile=(View)cards.get(index).getParent();
+            if(tile==null)return;
+            views.add(tile);
+        }
+        arrangeRow(views);
+    }
+
+    /** Puts the row's tiles in this order without ever detaching the focused tile, so focus and the app grid stay put. */
+    private void arrangeRow(List<View> views) {
+        if(row==null || views.size()!=row.getChildCount())return;
+        boolean same=true;
+        for(int i=0;i<row.getChildCount();i++) {
+            if(row.getChildAt(i)!=views.get(i)) {
+                same=false;
+                break;
+            }
+        }
+        if(same)return;
+        View focused=activity.getCurrentFocus();
+        View keep=null;
+        for(int i=0;i<row.getChildCount();i++) {
+            if(isInside(row.getChildAt(i),focused)) {
+                keep=row.getChildAt(i);
+                break;
+            }
+        }
+        // Detach every tile but the focused one, saving each tile's layout params.
+        Map<View,ViewGroup.LayoutParams> params=new HashMap<>();
+        for(int i=row.getChildCount()-1;i>=0;i--) {
+            View child=row.getChildAt(i);
+            params.put(child,child.getLayoutParams());
+            if(child!=keep)row.removeViewAt(i);
+        }
+        for(int i=0;i<views.size();i++) {
+            if(views.get(i)==keep)continue;
+            row.addView(views.get(i),i,params.get(views.get(i)));
+        }
+        row.requestLayout();
+    }
+    private void applyTileWidths() {
+        int base=tileWidth>0?tileWidth:dp(125);
+        for(int i=0;i<cards.size();i++) {
+            View tile=(View)cards.get(i).getParent();
+            if(tile==null)continue;
+            ViewGroup.LayoutParams lp=tile.getLayoutParams();
+            if(lp==null)continue;
+            int width=isActiveGame(i)?Math.round(base*1.3f):base;
+            if(lp.width!=width) {lp.width=width;tile.setLayoutParams(lp);}
+        }
+    }
+    private boolean isActiveGame(int index) {
+        return activeGameId!=null && catalog!=null && index>=0 && index<catalog.games.size()
+                && activeGameId.equals(catalog.games.get(index).appId);
+    }
+    private List<String> savedOrder() {
+        List<String> names=new ArrayList<>();
+        String raw=activity.getSharedPreferences("moonlight",0).getString("game_order","");
+        if(raw==null || raw.isEmpty() || raw.length()>16384)return names;
+        try {
+            JSONArray saved=new JSONArray(raw);
+            for(int i=0;i<saved.length() && i<MoonlightCatalog.MAX_GAMES*4;i++) {
+                String name=saved.optString(i,null);
+                if(name!=null)names.add(name);
+            }
+        } catch(org.json.JSONException ignored) {}
+        return names;
+    }
+    private List<String> visualNames() {
+        List<String> names=new ArrayList<>();
+        if(row==null || catalog==null)return names;
+        for(int i=0;i<row.getChildCount();i++) {
+            View child=row.getChildAt(i);
+            for(int game=0;game<cards.size();game++) {
+                if(cards.get(game).getParent()==child) {names.add(catalog.games.get(game).name);break;}
+            }
+        }
+        return names;
+    }
+    private void saveOrder() {
+        JSONArray order=new JSONArray();
+        for(String name:visualNames())order.put(name);
+        activity.getSharedPreferences("moonlight",0).edit().putString("game_order",order.toString()).apply();
+    }
+    private void startMove(int index) {
+        if(moving!=null || !hasGameCatalog() || index<0 || index>=cards.size())return;
+        moving=cards.get(index);
+        selected=index;
+        if(animateGames) {
+            for(int i=0;i<cards.size();i++) {
+                View tile=(View)cards.get(i).getParent();
+                if(tile==null)continue;
+                ObjectAnimator wobble=ObjectAnimator.ofFloat(tile,"rotation",-1.5f,1.5f);
+                wobble.setDuration(110+(i*10)%31);
+                wobble.setRepeatMode(ValueAnimator.REVERSE);
+                wobble.setRepeatCount(ValueAnimator.INFINITE);
+                wobble.start();
+                wobbles.add(wobble);
+            }
+        }
+        for(int i=0;i<cards.size();i++) {
+            View tile=(View)cards.get(i).getParent();
+            if(tile!=null)tile.setAlpha(cards.get(i)==moving?1f:0.45f);
+        }
+    }
+    private boolean moveKey(int key) {
+        if(key==KeyEvent.KEYCODE_DPAD_LEFT) {movePicked(-1);return true;}
+        if(key==KeyEvent.KEYCODE_DPAD_RIGHT) {movePicked(1);return true;}
+        if(key==KeyEvent.KEYCODE_DPAD_CENTER || key==KeyEvent.KEYCODE_ENTER || key==KeyEvent.KEYCODE_NUMPAD_ENTER) {
+            guardClick();
+            endMove();
+            return true;
+        }
+        if(key==KeyEvent.KEYCODE_BACK || key==KeyEvent.KEYCODE_DPAD_UP || key==KeyEvent.KEYCODE_DPAD_DOWN) {
+            endMove();
+            return true;
+        }
+        return false;
+    }
+    private void movePicked(int delta) {
+        if(moving==null || row==null || catalog==null)return;
+        List<String> names=visualNames();
+        int from=row.indexOfChild((View)moving.getParent());
+        int to=from+delta;
+        if(from<0 || to<0 || to>=names.size())return;
+        List<View> views=new ArrayList<>();
+        for(String name:MoonlightCatalog.moved(names,from,to)) {
+            for(int i=0;i<cards.size();i++) {
+                if(catalog.games.get(i).name.equals(name)) {views.add((View)cards.get(i).getParent());break;}
+            }
+        }
+        arrangeRow(views);
+        moving.requestFocusFromTouch();
+        if(scroll!=null)scroll.smoothScrollTo(Math.max(0,((View)moving.getParent()).getLeft()-dp(8)),0);
+    }
+    private void endMove() {
+        if(moving==null)return;
+        for(ObjectAnimator wobble:wobbles)wobble.cancel();
+        wobbles.clear();
+        for(TextView card:cards) {
+            View tile=(View)card.getParent();
+            if(tile!=null) {tile.setRotation(0f);tile.setAlpha(1f);}
+        }
+        moving=null;
+        saveOrder();
+    }
+    /** A click queued by the OK key-up that leaves move mode must not open the game. */
+    private void guardClick() {clickGuard=SystemClock.uptimeMillis()+350;}
+
+    /** Minimal shelf when Moonlight is installed but no valid catalog is available. */
+    private void showFallback() {
+        fallback=true;catalog=null;
+        panel=new LinearLayout(activity);panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setClipChildren(false);panel.setClipToPadding(false);
+        FrameLayout.LayoutParams pp=new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(220));
+        pp.leftMargin=dp(60);pp.rightMargin=dp(60);pp.topMargin=dp(118);
+        root.addView(panel,root.indexOfChild(glass),pp);
+        LinearLayout heading=new LinearLayout(activity);heading.setGravity(Gravity.END|Gravity.CENTER_VERTICAL);
+        panel.addView(heading,new LinearLayout.LayoutParams(-1,dp(36)));
+        LinearLayout holder=new LinearLayout(activity);holder.setOrientation(LinearLayout.HORIZONTAL);holder.setClipChildren(false);
+        FrameLayout tile=new FrameLayout(activity);tile.setClipChildren(false);
+        View backdrop=new View(activity);backdrop.setBackground(shape(0xff242126,0));
+        tile.addView(backdrop,new FrameLayout.LayoutParams(-1,-1));
+        TextView card=text("Abrir Moonlight",14,Color.WHITE);
+        card.setGravity(Gravity.CENTER);card.setPadding(dp(8),dp(8),dp(8),dp(8));
+        card.setBackground(shape(Color.TRANSPARENT,0));card.setFocusable(true);card.setClickable(true);
+        card.setId(View.generateViewId());card.setContentDescription("Abrir Moonlight");
+        tile.addView(card,new FrameLayout.LayoutParams(-1,-1));
+        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(dp(125),-1);lp.rightMargin=dp(12);
+        holder.addView(tile,lp);
+        panel.addView(holder,new LinearLayout.LayoutParams(-1,0,1));
+        fallbackCard=card;fallbackTile=tile;
+        if(!lowerApps)parkDock();
+        card.setOnClickListener(v->openMoonlight());
+        card.setOnFocusChangeListener((v,focused)-> {
+            card.setBackground(shape(Color.TRANSPARENT,focused?0xff8deaff:0));
+            if(focused){glass.animate().cancel();glass.setAlpha(0f);}
+        });
+        card.setOnKeyListener((v,key,event)-> {
+            if(event.getAction()!=KeyEvent.ACTION_DOWN)return false;
+            if(key==KeyEvent.KEYCODE_DPAD_DOWN){focusDock();return true;}
+            return false;
+        });
+        hero.setVisibility(View.INVISIBLE);
+        root.setBackground(new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,new int[]{0xff310500,Color.BLACK}));
+        grid.requestLayout();
+        position();
     }
     private void chooseHost() {
         int selectedHost=Math.max(0,hostUuids.indexOf(pickedUuid));
@@ -416,8 +692,12 @@ final class MoonlightShelf {
         if(sessionMenu!=null)sessionMenu.close();sessionMenu=null;
         if(gameSpringX!=null)gameSpringX.cancel();if(gameSpringY!=null)gameSpringY.cancel();
         if(gameGlass!=null)root.removeView(gameGlass);gameGlass=null;
+        for(ObjectAnimator wobble:wobbles)wobble.cancel();
+        wobbles.clear();
+        stopActivePulse();removePlayButton();
         if(panel!=null)root.removeView(panel);
-        panel=null;catalog=null;cards.clear();covers.clear();recycle(bitmaps);bitmaps.clear();panelHeight=0;
+        panel=null;row=null;catalog=null;cards.clear();covers.clear();recycle(bitmaps);bitmaps.clear();panelHeight=0;
+        fallback=false;fallbackCard=null;fallbackTile=null;moving=null;activeGameId=null;tileWidth=0;
         root.setBackground(originalBackground);
         hero.setVisibility(Config.load(activity).dockTitle?View.VISIBLE:View.GONE);
         grid.requestLayout();
