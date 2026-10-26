@@ -79,6 +79,7 @@ final class MoonlightShelf {
     private int selected;
     private String activeGameId;
     private boolean busy;
+    private boolean reloadPending;
     private boolean destroyed;
     private long loadedStamp = Long.MIN_VALUE;
     private int panelHeight;
@@ -112,7 +113,8 @@ final class MoonlightShelf {
             return;
         }
         if(sessionMenu!=null && hasGameCatalog())sessionMenu.resume();
-        if (destroyed || busy || directory==null) return;
+        if (destroyed || directory==null) return;
+        if (busy) {reloadPending=true;return;}
         final long stamp=new File(directory,"catalog.json").lastModified();
         if (stamp==loadedStamp) { restoreAfterReturn();position();return; }
         busy=true;
@@ -155,14 +157,22 @@ final class MoonlightShelf {
             final MoonlightCatalog ready=result;
             main.post(()-> {
                 busy=false;
-                if(destroyed) {recycle(images);return;}
+                if(destroyed) {reloadPending=false;recycle(images);return;}
                 loadedStamp=stamp;
                 removePanel();
-                if(!enabled() || !moonlightInstalled()) {loadedStamp=Long.MIN_VALUE;recycle(images);return;}
-                if(ready==null) {recycle(images);showFallback();return;}
-                catalog=ready;hostNames=names;hostUuids=uuids;bitmaps.addAll(images);build();
+                if(!enabled() || !moonlightInstalled()) {loadedStamp=Long.MIN_VALUE;reloadPending=false;recycle(images);return;}
+                if(ready==null) {recycle(images);showFallback();}
+                else {catalog=ready;hostNames=names;hostUuids=uuids;bitmaps.addAll(images);build();}
+                boolean pending=reloadPending;reloadPending=false;
+                if(pending && resumed && !destroyed
+                        && needsReload(pending,stamp,new File(directory,"catalog.json").lastModified()))resume();
             });
         });
+    }
+
+    /** A resume during a load forces a fresh load only when the catalog changed after that load started. */
+    static boolean needsReload(boolean pending,long startedStamp,long currentStamp) {
+        return pending && currentStamp!=startedStamp;
     }
 
     private static String read(File file) throws IOException {

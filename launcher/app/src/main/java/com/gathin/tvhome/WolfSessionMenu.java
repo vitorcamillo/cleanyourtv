@@ -31,7 +31,15 @@ final class WolfSessionMenu {
     WolfSessionMenu(Activity activity,String hostUuid,Listener listener) {
         this(activity,listener,()-> {
             WolfControlClient control=WolfControlClient.load(activity);
-            if(control==null || !control.controls(hostUuid))throw new WolfControlClient.ControlException("config_error");
+            // No wolf-control.json: no session control, so Moonlight launches directly.
+            if(control==null)return new WolfControl() {
+                @Override public WolfSession getSession() {return WolfSession.inactive();}
+                @Override public WolfSession stop(WolfSession expected) throws WolfControlClient.ControlException {
+                    if(expected==null || !expected.active)throw new WolfControlClient.ControlException("invalid_request");
+                    return WolfSession.inactive();
+                }
+            };
+            if(!control.controls(hostUuid))throw new WolfControlClient.ControlException("config_error");
             return control;
         },new ThreadPoolExecutor(1,1,0,TimeUnit.MILLISECONDS,new ArrayBlockingQueue<>(1)));
     }
