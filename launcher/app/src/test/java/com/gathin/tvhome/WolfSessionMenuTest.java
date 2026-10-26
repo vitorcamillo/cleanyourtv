@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class)
@@ -114,6 +115,20 @@ public class WolfSessionMenuTest {
             assertFalse(Shadows.shadowOf(dialog()).getMessage().toString().contains("unknown-sensitive-detail"));
             dialog().dismiss();
         }
+    }
+    @Test public void configRemovedBeforeConfirmedStopFailsWithConfigError() throws Exception {
+        assertEquals("config_error",assertThrows(WolfControlClient.ControlException.class,
+            ()->WolfSessionMenu.absentControl().stop(new WolfSession(true,"10","Mario Kart",REV))).code);
+        AtomicInteger opens=new AtomicInteger();
+        WolfSessionMenu switching=new WolfSessionMenu(activity,listener(),
+            ()->opens.getAndIncrement()<2?control:WolfSessionMenu.absentControl(),executor);
+        try {
+            switching.resume();executor.run();
+            switching.open("20","Donkey Kong");executor.run();
+            confirm();executor.run();
+            assertEquals(0,control.stops);assertTrue(control.state.active);assertTrue(launches.isEmpty());
+            assertTrue(Shadows.shadowOf(dialog()).getMessage().toString().contains("configuração precisa ser conferida"));
+        } finally {switching.close();}
     }
     @Test public void activeResponseToStopIsNotSuccess(){
         control.keepActive=true;menu.open("20","Donkey Kong");executor.run();confirm();executor.run();

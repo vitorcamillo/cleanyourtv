@@ -28,17 +28,21 @@ final class WolfSessionMenu {
     private boolean resumed,destroyed,busy,refreshPending;
     private int generation;
 
+    /** No wolf-control.json: reads as inactive for a direct launch, but a confirmed stop cannot be faked. */
+    static WolfControl absentControl() {
+        return new WolfControl() {
+            @Override public WolfSession getSession() {return WolfSession.inactive();}
+            @Override public WolfSession stop(WolfSession expected) throws WolfControlClient.ControlException {
+                if(expected==null || !expected.active)throw new WolfControlClient.ControlException("invalid_request");
+                throw new WolfControlClient.ControlException("config_error");
+            }
+        };
+    }
     WolfSessionMenu(Activity activity,String hostUuid,Listener listener) {
         this(activity,listener,()-> {
             WolfControlClient control=WolfControlClient.load(activity);
             // No wolf-control.json: no session control, so Moonlight launches directly.
-            if(control==null)return new WolfControl() {
-                @Override public WolfSession getSession() {return WolfSession.inactive();}
-                @Override public WolfSession stop(WolfSession expected) throws WolfControlClient.ControlException {
-                    if(expected==null || !expected.active)throw new WolfControlClient.ControlException("invalid_request");
-                    return WolfSession.inactive();
-                }
-            };
+            if(control==null)return absentControl();
             if(!control.controls(hostUuid))throw new WolfControlClient.ControlException("config_error");
             return control;
         },new ThreadPoolExecutor(1,1,0,TimeUnit.MILLISECONDS,new ArrayBlockingQueue<>(1)));

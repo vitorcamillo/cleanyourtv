@@ -51,7 +51,7 @@ final class MoonlightShelf {
     private final float density;
     private final boolean dockRow;
     private final Handler main = new Handler(Looper.getMainLooper());
-    private final ExecutorService loader = Executors.newSingleThreadExecutor();
+    private final ExecutorService loader;
     private final ViewTreeObserver.OnGlobalLayoutListener layoutListener = this::position;
     private final List<TextView> cards = new ArrayList<>();
     private final List<ImageView> covers = new ArrayList<>();
@@ -96,7 +96,10 @@ final class MoonlightShelf {
     private final android.graphics.drawable.Drawable originalBackground;
 
     MoonlightShelf(Activity activity, FrameLayout root, RecyclerView grid, View hero, View glass) {
-        this.activity=activity; this.root=root; this.grid=grid; this.hero=hero; this.glass=glass;
+        this(activity, root, grid, hero, glass, Executors.newSingleThreadExecutor());
+    }
+    MoonlightShelf(Activity activity, FrameLayout root, RecyclerView grid, View hero, View glass, ExecutorService loader) {
+        this.activity=activity; this.root=root; this.grid=grid; this.hero=hero; this.glass=glass; this.loader=loader;
         density=activity.getResources().getDisplayMetrics().density;
         dockRow=Config.load(activity).dockRow;
         originalBackground=root.getBackground();
