@@ -22,8 +22,6 @@ import java.io.FileNotFoundException;
 public class ThemeProvider extends ContentProvider {
 
     private File file(Uri uri) throws FileNotFoundException {
-        if (uri.getPathSegments().size() == 1 && "wolf-control.json".equals(uri.getPathSegments().get(0)))
-            return new File(getContext().getFilesDir(), "wolf-control.json");
         String path = ThemeFiles.path(uri.getPathSegments());
         File dir = Config.dir(getContext());
         if (dir == null || path == null) throw new FileNotFoundException(String.valueOf(uri));
