@@ -70,6 +70,7 @@ final class MoonlightShelf {
     private TextView pcChoice;
     private WolfSessionMenu sessionMenu;
     private boolean resumed;
+    private boolean syncing;
     private android.app.AlertDialog hostDialog;
     private List<String> hostNames = new ArrayList<>();
     private List<String> hostUuids = new ArrayList<>();
@@ -114,6 +115,18 @@ final class MoonlightShelf {
             loadedStamp=Long.MIN_VALUE;
             if(panel!=null)removePanel();
             return;
+        }
+        if(!syncing && directory!=null && !destroyed && new File(activity.getFilesDir(),"wolf-control.json").isFile()) {
+            syncing=true;
+            loader.execute(()-> {
+                boolean changed=false;
+                try {
+                    WolfControlClient client=WolfControlClient.load(activity);
+                    if(client!=null && (directory.isDirectory() || directory.mkdirs()))changed=WolfCatalogSync.sync(adapter(client),directory);
+                } catch(Exception ignored) { /* Keep the current catalog. */ }
+                final boolean updated=changed;
+                main.post(()-> {syncing=false;if(updated && resumed && !destroyed) {loadedStamp=Long.MIN_VALUE;resume();}});
+            });
         }
         if(sessionMenu!=null && hasGameCatalog())sessionMenu.resume();
         if (destroyed || directory==null) return;
@@ -171,6 +184,14 @@ final class MoonlightShelf {
                         && needsReload(pending,stamp,new File(directory,"catalog.json").lastModified()))resume();
             });
         });
+    }
+
+    private static WolfCatalogSync.Source adapter(WolfControlClient client) {
+        return new WolfCatalogSync.Source() {
+            public String hostUuid() {return client.hostUuid();}
+            public List<WolfCatalogSync.Entry> games() throws WolfControlClient.ControlException {return client.games();}
+            public byte[] cover(String id) throws WolfControlClient.ControlException {return client.cover(id);}
+        };
     }
 
     /** A resume during a load forces a fresh load only when the catalog changed after that load started. */

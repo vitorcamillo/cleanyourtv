@@ -3,6 +3,9 @@ package com.gathin.tvhome;
 import android.content.Context;
 import android.util.Base64;
 import org.json.JSONObject;
+import org.json.JSONArray;
+import java.util.ArrayList;
+import java.util.List;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -77,13 +80,82 @@ final class WolfControlClient implements WolfControl {
         } catch(ControlException error) {throw error;}
         catch(Exception error) {throw new ControlException("protocol_error");}
     }
+    String hostUuid() {return hostUuid;}
+    private HttpsURLConnection open(String method,String path) throws java.io.IOException {
+        HttpsURLConnection connection=(HttpsURLConnection)new URL(baseUrl+path).openConnection();
+        connection.setSSLSocketFactory(ssl);
+        connection.setConnectTimeout(2000);connection.setReadTimeout(8000);connection.setUseCaches(false);connection.setInstanceFollowRedirects(false);
+        connection.setRequestMethod(method);connection.setRequestProperty("Authorization","Bearer "+token);connection.setRequestProperty("Accept","application/json");
+        return connection;
+    }
+    private static void checkStatus(HttpsURLConnection connection,int status) throws Exception {
+        String type=connection.getContentType();
+        if(type==null || !"application/json".equalsIgnoreCase(type.split(";",2)[0].trim()))throw new ControlException("protocol_error");
+        JSONObject json;
+        try(InputStream input=connection.getErrorStream()){json=new JSONObject(read(input));}
+        if(status==401)throw new ControlException("unauthorized");
+        String code=json.optJSONObject("error")==null?"":json.getJSONObject("error").optString("code","");
+        if(status==409 && (code.equals("session_changed") || code.equals("busy")))throw new ControlException(code);
+        if(status==504)throw new ControlException("stop_timeout");
+        if(status==502 || status==503 || status==500)throw new ControlException("upstream_unavailable");
+        throw new ControlException("protocol_error");
+    }
+    List<WolfCatalogSync.Entry> games() throws ControlException {
+        HttpsURLConnection connection=null;
+        try {
+            connection=open("GET","/v1/games");int status=connection.getResponseCode();
+            if(status!=200)checkStatus(connection,status);
+            String type=connection.getContentType();
+            if(type==null || !"application/json".equalsIgnoreCase(type.split(";",2)[0].trim()))throw new ControlException("protocol_error");
+            JSONObject json;
+            try(InputStream input=connection.getInputStream()){json=new JSONObject(new String(readBytes(input,65536),StandardCharsets.UTF_8));}
+            if(!hostUuid.equals(json.getString("host_uuid")))throw new ControlException("protocol_error");
+            JSONArray games=json.getJSONArray("games");if(games.length()>64)throw new ControlException("protocol_error");
+            List<WolfCatalogSync.Entry> result=new ArrayList<>();
+            for(int i=0;i<games.length();i++) {
+                JSONObject game=games.getJSONObject(i);
+                if(!(game.get("app_id") instanceof String) || !(game.get("name") instanceof String) || !game.has("cover"))throw new ControlException("protocol_error");
+                String id=game.getString("app_id"),name=MoonlightCatalog.label(game.getString("name"));WolfSession.validateId(id);
+                String cover=null;
+                if(!game.isNull("cover")) {
+                    if(!(game.get("cover") instanceof String))throw new ControlException("protocol_error");
+                    cover=game.getString("cover");if(!cover.equals(id+".png") && !cover.equals(id+".jpg"))throw new ControlException("protocol_error");
+                }
+                result.add(new WolfCatalogSync.Entry(id,name,cover));
+            }
+            return result;
+        } catch(ControlException error) {throw error;}
+        catch(SSLException error) {throw new ControlException("tls_error");}
+        catch(java.io.IOException error) {throw new ControlException("network_error");}
+        catch(Exception error) {throw new ControlException("protocol_error");}
+        finally {if(connection!=null)connection.disconnect();}
+    }
+    byte[] cover(String appId) throws ControlException {
+        HttpsURLConnection connection=null;
+        try {
+            WolfSession.validateId(appId);connection=open("GET","/v1/games/"+appId+"/cover");int status=connection.getResponseCode();
+            if(status==404)throw new ControlException("not_found");
+            if(status!=200)checkStatus(connection,status);
+            String type=connection.getContentType();if(type==null)throw new ControlException("protocol_error");
+            type=type.split(";",2)[0].trim();
+            if(!"image/png".equalsIgnoreCase(type) && !"image/jpeg".equalsIgnoreCase(type))throw new ControlException("protocol_error");
+            try(InputStream input=connection.getInputStream()){return readBytes(input,4*1024*1024);}
+        } catch(ControlException error) {throw error;}
+        catch(SSLException error) {throw new ControlException("tls_error");}
+        catch(java.io.IOException error) {throw new ControlException("network_error");}
+        catch(Exception error) {throw new ControlException("protocol_error");}
+        finally {if(connection!=null)connection.disconnect();}
+    }
+    private static byte[] readBytes(InputStream input,int limit) throws java.io.IOException,ControlException {
+        if(input==null)throw new ControlException("protocol_error");
+        ByteArrayOutputStream bytes=new ByteArrayOutputStream();byte[] buffer=new byte[2048];int count;
+        while((count=input.read(buffer))!=-1){if(bytes.size()+count>limit)throw new ControlException("protocol_error");bytes.write(buffer,0,count);}
+        return bytes.toByteArray();
+    }
     private WolfSession request(String method,String path,JSONObject body) throws ControlException {
         HttpsURLConnection connection=null;
         try {
-            connection=(HttpsURLConnection)new URL(baseUrl+path).openConnection();
-            connection.setSSLSocketFactory(ssl); // Default hostname verification remains enabled (certificate SAN).
-            connection.setConnectTimeout(2000);connection.setReadTimeout(8000);connection.setUseCaches(false);connection.setInstanceFollowRedirects(false);
-            connection.setRequestMethod(method);connection.setRequestProperty("Authorization","Bearer "+token);connection.setRequestProperty("Accept","application/json");
+            connection=open(method,path);
             if(body!=null) {
                 byte[] bytes=body.toString().getBytes(StandardCharsets.UTF_8);connection.setDoOutput(true);
                 connection.setRequestProperty("Content-Type","application/json");connection.setFixedLengthStreamingMode(bytes.length);

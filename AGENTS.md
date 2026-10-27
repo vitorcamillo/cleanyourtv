@@ -132,7 +132,7 @@ This repository is a personal fork (see "Your own repository" above). On top of 
 
 - **`INTERNET` permission, LAN only**, used by `WolfControlClient` alone: HTTPS to an operator-provisioned session
   controller on a private IPv4 address (10/8, 172.16/12, 192.168/16), port 47991, certificate pinned, bearer token,
-  no other host, no analytics, no background polling (one query when Home resumes).
+  no other host, no analytics, no background polling (the session and the game list are read when Home resumes; covers download once).
 - **The Moonlight shelf is on by default when Moonlight (`com.limelight`) is installed**, and can be switched off
   in the launcher's Settings menu (hold OK on Settings). Without Moonlight nothing changes.
 - **`tile_menu` defaults to true**: holding OK picks a tile up for reordering; the Menu key opens the tile menu.

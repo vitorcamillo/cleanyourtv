@@ -154,6 +154,16 @@ public class WolfControlClientTest {
         int before=requests.get();assertEquals("invalid_request",assertThrows(WolfControlClient.ControlException.class,()->client.stop(WolfSession.inactive())).code);assertEquals(before,requests.get());
         assertThrows(WolfControlClient.ControlException.class,()->client.stop(null));
     }
+    @Test public void gamesValidateIdentityAndEntries() throws Exception {
+        body=new JSONObject().put("host_uuid",HOST).put("games",new org.json.JSONArray().put(new JSONObject().put("app_id","10").put("name","Game").put("cover","10.png"))).toString();
+        assertEquals("10",client.games().get(0).appId);assertEquals("Bearer "+TOKEN,lastAuthorization);
+        body=new JSONObject(body).put("host_uuid","other").toString();
+        assertEquals("protocol_error",assertThrows(WolfControlClient.ControlException.class,()->client.games()).code);
+    }
+    @Test public void coverValidatesContentType() throws Exception {
+        body="fixture";type="image/png";assertArrayEquals(body.getBytes(StandardCharsets.UTF_8),client.cover("10"));
+        type="text/html";assertEquals("protocol_error",assertThrows(WolfControlClient.ControlException.class,()->client.cover("10")).code);
+    }
     @Test public void disconnectedServiceHasExplicitNetworkFailure() throws Exception {
         server.close();serverExecutor.shutdownNow();assertEquals("network_error",assertThrows(WolfControlClient.ControlException.class,()->client.getSession()).code);
     }
