@@ -52,6 +52,7 @@ final class MoonlightShelf {
     private final boolean dockRow;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService loader;
+    private final ExecutorService syncer = Executors.newSingleThreadExecutor();
     private final ViewTreeObserver.OnGlobalLayoutListener layoutListener = this::position;
     private final List<TextView> cards = new ArrayList<>();
     private final List<ImageView> covers = new ArrayList<>();
@@ -71,6 +72,7 @@ final class MoonlightShelf {
     private WolfSessionMenu sessionMenu;
     private boolean resumed;
     private boolean syncing;
+    private boolean skipNextSync;
     private android.app.AlertDialog hostDialog;
     private List<String> hostNames = new ArrayList<>();
     private List<String> hostUuids = new ArrayList<>();
@@ -117,16 +119,19 @@ final class MoonlightShelf {
             return;
         }
         if(!syncing && directory!=null && !destroyed && new File(activity.getFilesDir(),"wolf-control.json").isFile()) {
-            syncing=true;
-            loader.execute(()-> {
-                boolean changed=false;
-                try {
-                    WolfControlClient client=WolfControlClient.load(activity);
-                    if(client!=null && (directory.isDirectory() || directory.mkdirs()))changed=WolfCatalogSync.sync(adapter(client),directory);
-                } catch(Exception ignored) { /* Keep the current catalog. */ }
-                final boolean updated=changed;
-                main.post(()-> {syncing=false;if(updated && resumed && !destroyed) {loadedStamp=Long.MIN_VALUE;resume();}});
-            });
+            if(skipNextSync)skipNextSync=false;
+            else {
+                syncing=true;
+                syncer.execute(()-> {
+                    boolean changed=false;
+                    try {
+                        WolfControlClient client=WolfControlClient.load(activity);
+                        if(client!=null && (directory.isDirectory() || directory.mkdirs()))changed=WolfCatalogSync.sync(adapter(client),directory,SystemClock.uptimeMillis()+20000,SystemClock::uptimeMillis);
+                    } catch(Exception ignored) { /* Keep the current catalog. */ }
+                    final boolean updated=changed;
+                    main.post(()-> {syncing=false;if(updated && resumed && !destroyed) {skipNextSync=true;loadedStamp=Long.MIN_VALUE;resume();}});
+                });
+            }
         }
         if(sessionMenu!=null && hasGameCatalog())sessionMenu.resume();
         if (destroyed || directory==null) return;
@@ -755,6 +760,6 @@ final class MoonlightShelf {
     }
     private static void recycle(List<Bitmap> images) {for(Bitmap b:images)if(b!=null && !b.isRecycled())b.recycle();}
     void close() {
-        destroyed=true;if(hostDialog!=null)hostDialog.dismiss();loader.shutdownNow();root.getViewTreeObserver().removeOnGlobalLayoutListener(layoutListener);removePanel();
+        destroyed=true;if(hostDialog!=null)hostDialog.dismiss();loader.shutdownNow();syncer.shutdownNow();root.getViewTreeObserver().removeOnGlobalLayoutListener(layoutListener);removePanel();
     }
 }
